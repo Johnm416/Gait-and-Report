@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Movement Analysis — Live Assessment</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2235;
+    --border: rgba(255,255,255,0.08);
+    --accent: #00d4ff;
+    --accent2: #7c3aed;
+    --text: #f0f4ff;
+    --muted: #6b7a99;
+    --green: #10b981;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --hip-color: #00d4ff;
+    --knee-color: #a78bfa;
+    --ankle-color: #34d399;
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1rem 2rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .logo { font-family: 'Space Mono', monospace; font-size: 18px; color: var(--accent); letter-spacing: -0.5px; }
+  .logo span { color: var(--text); }
+  .status-pill {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--muted);
+    background: var(--surface2); border: 1px solid var(--border);
+    padding: 4px 12px; border-radius: 20px;
+  }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 1.5s infinite; }
+  .status-dot.recording { background: var(--red); box-shadow: 0 0 6px var(--red); animation: pulse 0.8s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  .main { display: grid; grid-template-columns: 1fr 380px; gap: 0; height: calc(100vh - 57px); }
+
+  .left-panel { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; }
+  .right-panel { border-left: 1px solid var(--border); padding: 1.5rem; overflow-y: auto; background: var(--surface); display: flex; flex-direction: column; gap: 1rem; }
+
+  .cam-wrap {
+    position: relative; border-radius: 12px; overflow: hidden;
+    background: #000; border: 1px solid var(--border);
+    aspect-ratio: 4/3; width: 100%;
+  }
+  #inputVideo { position: absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; transform: scaleX(-1); }
+  #outputCanvas { position: absolute; top:0; left:0; width:100%; height:100%; transform: scaleX(-1); }
+
+  .cam-overlay {
+    position: absolute; top:0; left:0; right:0; bottom:0;
+    pointer-events: none;
+  }
+  .cam-corner { position: absolute; width: 20px; height: 20px; border-color: var(--accent); border-style: solid; opacity: 0.6; }
+  .cam-corner.tl { top:12px; left:12px; border-width: 2px 0 0 2px; }
+  .cam-corner.tr { top:12px; right:12px; border-width: 2px 2px 0 0; }
+  .cam-corner.bl { bottom:12px; left:12px; border-width: 0 0 2px 2px; }
+  .cam-corner.br { bottom:12px; right:12px; border-width: 0 2px 2px 0; }
+
+  .rec-badge {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(239,68,68,0.15); border: 1px solid var(--red);
+    color: var(--red); font-family: 'Space Mono', monospace; font-size: 11px;
+    padding: 3px 10px; border-radius: 4px; display: none;
+  }
+  .rec-badge.show { display: block; }
+
+  .angle-live {
+    position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px;
+  }
+  .angle-chip {
+    background: rgba(10,14,26,0.85); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 10px; font-family: 'Space Mono', monospace; font-size: 12px;
+  }
+  .angle-chip span { color: var(--muted); font-size: 10px; display: block; }
+
+  .controls { display: flex; gap: 10px; }
+  .btn {
+    flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text); font-family: 'DM Sans', sans-serif;
+    font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+  .btn.primary:hover { opacity: 0.85; }
+  .btn.danger { background: rgba(239,68,68,0.1); border-color: var(--red); color: var(--red); }
+  .btn.danger:hover { background: rgba(239,68,68,0.2); }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .patient-form { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .form-group { display: flex; flex-direction: column; gap: 5px; }
+  .form-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .form-group input, .form-group select {
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 10px; font-family: 'DM Sans', sans-serif; font-size: 13px;
+    outline: none; transition: border-color 0.15s;
+  }
+  .form-group input:focus, .form-group select:focus { border-color: var(--accent); }
+  .form-group select option { background: var(--surface); }
+
+  .section-label {
+    font-size: 10px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem;
+  }
+
+  .live-meters { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+  .meter-card {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.75rem; text-align: center;
+  }
+  .meter-label { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+  .meter-val { font-family: 'Space Mono', monospace; font-size: 22px; font-weight: 700; }
+  .meter-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  .mini-chart-wrap { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
+  .mini-chart-title { font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 8px; display: flex; justify-content: space-between; }
+  .mini-chart-title span { color: var(--text); font-family: 'Space Mono', monospace; font-size: 13px; }
+
+  .report-section {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem; display: none;
+  }
+  .report-section.show { display: block; }
+
+  .report-header { margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); }
+  .report-title { font-family: 'Space Mono', monospace; font-size: 14px; color: var(--accent); }
+  .report-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+  .risk-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; margin-bottom: 1rem; }
+  .risk-chip { border-radius: 6px; padding: 6px 8px; text-align: center; border: 1px solid transparent; }
+  .risk-chip .rj { font-size: 11px; font-weight: 600; color: var(--text); }
+  .risk-chip .rl { font-size: 10px; margin-top: 2px; }
+  .risk-low  { background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.3); }
+  .risk-low .rl  { color: var(--green); }
+  .risk-med  { background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.3); }
+  .risk-med .rl  { color: var(--amber); }
+  .risk-high { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); }
+  .risk-high .rl { color: var(--red); }
+
+  .stat-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+  .stat-table th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+  .stat-table td { padding: 6px 6px; border-bottom: 1px solid rgba(255,255,255,0.04); font-family: 'Space Mono', monospace; font-size: 11px; }
+  .stat-table td:first-child { font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--muted); }
+
+  .report-chart-wrap { position: relative; height: 140px; margin-bottom: 8px; }
+
+  .progress-bar-wrap { background: rgba(255,255,255,0.06); border-radius: 4px; height: 4px; margin: 4px 0 8px; }
+  .progress-bar { height: 4px; border-radius: 4px; background: var(--red); transition: width 0.1s; }
+
+  .info-box { background: rgba(0,212,255,0.06); border: 1px solid rgba(0,212,255,0.2); border-radius: 8px; padding: 0.75rem; font-size: 12px; color: #7dd3ea; line-height: 1.5; }
+
+  .timer-display { font-family: 'Space Mono', monospace; font-size: 28px; color: var(--red); text-align: center; }
+
+  @media (max-width: 900px) {
+    .main { grid-template-columns: 1fr; height: auto; }
+    .right-panel { border-left: none; border-top: 1px solid var(--border); }
+    .form-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Motion<span>IQ</span></div>
+  <div class="status-pill">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Initialising camera...</span>
+  </div>
+</div>
+
+<div class="main">
+
+  <div class="left-panel">
+
+    <div class="patient-form">
+      <div class="section-label" style="margin-bottom:0.75rem;">Patient details</div>
+      <div class="form-grid">
+        <div class="form-group"><label>Full name</label><input type="text" id="patientName" placeholder="e.g. John Smith"></div>
+        <div class="form-group"><label>Date of birth</label><input type="date" id="patientDob"></div>
+        <div class="form-group"><label>Assessment type</label>
+          <select id="assessType">
+            <option>Gait analysis</option>
+            <option>Squat assessment</option>
+            <option>Single leg stance</option>
+            <option>Functional movement screen</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Side</label>
+          <select id="assessSide">
+            <option>Both</option>
+            <option>Left</option>
+            <option>Right</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="cam-wrap">
+      <video id="inputVideo" autoplay muted playsinline></video>
+      <canvas id="outputCanvas"></canvas>
+      <div class="cam-overlay">
+        <div class="cam-corner tl"></div>
+        <div class="cam-corner tr"></div>
+        <div class="cam-corner bl"></div>
+        <div class="cam-corner br"></div>
+      </div>
+      <div class="rec-badge" id="recBadge">● REC <span id="recTimer">0.0s</span></div>
+      <div class="angle-live">
+        <div class="angle-chip" style="border-color:rgba(0,212,255,0.3);"><span>Hip</span><span id="liveHip" style="color:var(--hip-color);">--°</span></div>
+        <div class="angle-chip" style="border-color:rgba(167,139,250,0.3);"><span>Knee</span><span id="liveKnee" style="color:var(--knee-color);">--°</span></div>
+        <div class="angle-chip" style="border-color:rgba(52,211,153,0.3);"><span>Ankle</span><span id="liveAnkle" style="color:var(--ankle-color);">--°</span></div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn primary" id="startBtn" onclick="startRecording()" disabled>Start recording</button>
+      <button class="btn danger" id="stopBtn" onclick="stopRecording()" disabled>Stop &amp; analyse</button>
+      <button class="btn" id="resetBtn" onclick="resetAll()">Reset</button>
+    </div>
+
+    <div>
+      <div class="section-label">Live angles</div>
+      <div class="live-meters">
+        <div class="meter-card"><div class="meter-label">Hip</div><div class="meter-val" id="mHip" style="color:var(--hip-color);">--</div><div class="meter-sub">degrees</div></div>
+        <div class="meter-card"><div class="meter-label">Knee</div><div class="meter-val" id="mKnee" style="color:var(--knee-color);">--</div><div class="meter-sub">degrees</div></div>
+        <div class="meter-card"><div class="meter-label">Ankle</div><div class="meter-val" id="mAnkle" style="color:var(--ankle-color);">--</div><div class="meter-sub">degrees</div></div>
+      </div>
+    </div>
+
+    <div class="info-box" id="infoBox">
+      Position the patient so their full body is visible — head to feet. Stand side-on to the camera for sagittal plane analysis. Press <strong>Start recording</strong> when ready.
+    </div>
+
+  </div>
+
+  <div class="right-panel">
+
+    <div>
+      <div class="section-label">Live trace</div>
+      <div class="mini-chart-wrap">
+        <div class="mini-chart-title">Hip <span id="liveHipVal">--°</span></div>
+        <div style="position:relative;height:70px;"><canvas id="liveHipChart" role="img" aria-label="Live hip angle trace">Live hip angle</canvas></div>
+      </div>
+      <div class="mini-chart-wrap" style="margin-top:8px;">
+        <div class="mini-chart-title">Knee <span id="liveKneeVal">--°</span></div>
+        <div style="position:relative;height:70px;"><canvas id="liveKneeChart" role="img" aria-label="Live knee angle trace">Live knee angle</canvas></div>
+      </div>
+      <div class="mini-chart-wrap" style="margin-top:8px;">
+        <div class="mini-chart-title">Ankle <span id="liveAnkleVal">--°</span></div>
+        <div style="position:relative;height:70px;"><canvas id="liveAnkleChart" role="img" aria-label="Live ankle angle trace">Live ankle angle</canvas></div>
+      </div>
+    </div>
+
+    <div class="report-section" id="reportSection">
+      <div class="report-header">
+        <div class="report-title">Assessment report</div>
+        <div class="report-sub" id="reportMeta">--</div>
+      </div>
+
+      <div class="section-label">Risk classification</div>
+      <div class="risk-row" id="riskRow"></div>
+
+      <div class="section-label" style="margin-top:0.75rem;">Joint angle curves</div>
+      <div class="mini-chart-wrap">
+        <div class="mini-chart-title">Hip · knee · ankle</div>
+        <div class="report-chart-wrap"><canvas id="reportChart" role="img" aria-label="Recorded joint angle curves for hip knee and ankle">Recorded joint angles</canvas></div>
+      </div>
+
+      <div class="section-label" style="margin-top:0.75rem;">Peak values</div>
+      <table class="stat-table">
+        <thead><tr><th>Joint</th><th>Peak flex</th><th>Peak ext</th><th>ROM</th><th>vs norm</th></tr></thead>
+        <tbody id="statBody"></tbody>
+      </table>
+
+      <button class="btn primary" style="margin-top:1rem;width:100%;" onclick="exportReport()">Export report (HTML)</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const WINDOW = 120;
+const MAX_REC = 30;
+
+let recording = false, recStart = null, recTimer = null;
+let recorded = { hip:[], knee:[], ankle:[], t:[] };
+let liveBuffer = { hip:[], knee:[], ankle:[] };
+let reportChartInst = null;
+
+const liveCharts = {};
+
+function initLiveChart(id, color) {
+  const ctx = document.getElementById(id);
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels: Array(WINDOW).fill(''), datasets: [{ data: Array(WINDOW).fill(null), borderColor: color, backgroundColor: 'transparent', borderWidth: 1.5, pointRadius: 0, tension: 0.3 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: {
+        x: { display: false },
+        y: { ticks: { font: { size: 9 }, color: '#6b7a99', maxTicksLimit: 4 }, grid: { color: 'rgba(255,255,255,0.04)' } }
+      }
+    }
+  });
+}
+
+function pushLive(chart, buffer, val) {
+  buffer.push(val);
+  if (buffer.length > WINDOW) buffer.shift();
+  const padded = Array(WINDOW).fill(null);
+  buffer.forEach((v, i) => { padded[WINDOW - buffer.length + i] = v; });
+  chart.data.datasets[0].data = padded;
+  chart.update('none');
+}
+
+function calcAngle(a, b, c) {
+  const ab = { x: a.x - b.x, y: a.y - b.y };
+  const cb = { x: c.x - b.x, y: c.y - b.y };
+  const dot = ab.x * cb.x + ab.y * cb.y;
+  const magAB = Math.sqrt(ab.x ** 2 + ab.y ** 2);
+  const magCB = Math.sqrt(cb.x ** 2 + cb.y ** 2);
+  if (magAB === 0 || magCB === 0) return 0;
+  return Math.round(Math.acos(Math.max(-1, Math.min(1, dot / (magAB * magCB)))) * 180 / Math.PI);
+}
+
+function getAngles(lm) {
+  if (!lm || lm.length < 33) return null;
+  const L = (i) => lm[i];
+  const hip   = calcAngle(L(11), L(23), L(25));
+  const knee  = calcAngle(L(23), L(25), L(27));
+  const ankle = calcAngle(L(25), L(27), L(31));
+  return { hip: 180 - hip, knee: 180 - knee, ankle };
+}
+
+function setStatus(mode, text) {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  dot.className = 'status-dot' + (mode ? ' ' + mode : '');
+  txt.textContent = text;
+}
+
+function startRecording() {
+  if (!window.poseReady) { alert('Camera not ready yet — please wait.'); return; }
+  const name = document.getElementById('patientName').value.trim();
+  if (!name) { alert('Please enter patient name first.'); return; }
+  recording = true;
+  recStart = Date.now();
+  recorded = { hip: [], knee: [], ankle: [], t: [] };
+  document.getElementById('recBadge').classList.add('show');
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  document.getElementById('infoBox').textContent = 'Recording... Ask the patient to perform the movement naturally. Recording stops automatically after 30 seconds.';
+  setStatus('recording', 'Recording');
+  recTimer = setInterval(() => {
+    const elapsed = (Date.now() - recStart) / 1000;
+    document.getElementById('recTimer').textContent = elapsed.toFixed(1) + 's';
+    if (elapsed >= MAX_REC) stopRecording();
+  }, 100);
+}
+
+function stopRecording() {
+  if (!recording) return;
+  recording = false;
+  clearInterval(recTimer);
+  document.getElementById('recBadge').classList.remove('show');
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  setStatus('live', 'Live');
+  document.getElementById('infoBox').textContent = 'Recording complete. Report generated below.';
+  generateReport();
+}
+
+function resetAll() {
+  recording = false;
+  clearInterval(recTimer);
+  recorded = { hip: [], knee: [], ankle: [], t: [] };
+  liveBuffer = { hip: [], knee: [], ankle: [] };
+  document.getElementById('recBadge').classList.remove('show');
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('reportSection').classList.remove('show');
+  document.getElementById('infoBox').textContent = 'Position the patient so their full body is visible — head to feet. Stand side-on to the camera for sagittal plane analysis. Press Start recording when ready.';
+  ['liveHip','liveKnee','liveAnkle','mHip','mKnee','mAnkle','liveHipVal','liveKneeVal','liveAnkleVal'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = '--';
+  });
+}
+
+function normRef(joint) {
+  const norms = {
+    hip:   { mean: 20, sd: 8, desc: 'Sagittal ROM ~40°' },
+    knee:  { mean: 60, sd: 10, desc: 'Peak flex ~60°' },
+    ankle: { mean: 15, sd: 6, desc: 'Dorsiflexion ~15°' }
+  };
+  return norms[joint];
+}
+
+function classifyRisk(val, joint) {
+  const n = normRef(joint);
+  const diff = Math.abs(val - n.mean);
+  if (diff <= n.sd) return 'low';
+  if (diff <= n.sd * 2) return 'med';
+  return 'high';
+}
+
+function generateReport() {
+  if (recorded.hip.length < 5) {
+    document.getElementById('infoBox').textContent = 'Not enough data recorded. Please try again with a longer recording.';
+    return;
+  }
+
+  const stats = {};
+  ['hip', 'knee', 'ankle'].forEach(j => {
+    const d = recorded[j];
+    const max = Math.round(Math.max(...d));
+    const min = Math.round(Math.min(...d));
+    const mean = Math.round(d.reduce((a, b) => a + b, 0) / d.length);
+    const rom = max - min;
+    stats[j] = { max, min, mean, rom };
+  });
+
+  const name = document.getElementById('patientName').value;
+  const type = document.getElementById('assessType').value;
+  const now = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  document.getElementById('reportMeta').textContent = `${name} · ${type} · ${now}`;
+
+  const riskRow = document.getElementById('riskRow');
+  riskRow.innerHTML = '';
+  ['hip', 'knee', 'ankle'].forEach(j => {
+    const risk = classifyRisk(stats[j].mean, j);
+    const labels = { low: 'Normal', med: 'Monitor', high: 'Flagged' };
+    riskRow.innerHTML += `<div class="risk-chip risk-${risk}"><div class="rj">${j.charAt(0).toUpperCase() + j.slice(1)}</div><div class="rl">${labels[risk]}</div></div>`;
+  });
+
+  const tbody = document.getElementById('statBody');
+  tbody.innerHTML = '';
+  const norm = { hip: { mean: 20, sd: 8 }, knee: { mean: 60, sd: 10 }, ankle: { mean: 15, sd: 6 } };
+  ['hip', 'knee', 'ankle'].forEach(j => {
+    const s = stats[j];
+    const diff = s.mean - norm[j].mean;
+    const diffStr = (diff >= 0 ? '+' : '') + diff + '°';
+    const colors = { hip: 'var(--hip-color)', knee: 'var(--knee-color)', ankle: 'var(--ankle-color)' };
+    tbody.innerHTML += `<tr>
+      <td style="color:${colors[j]}">${j.charAt(0).toUpperCase() + j.slice(1)}</td>
+      <td>${s.max}°</td><td>${s.min}°</td><td>${s.rom}°</td>
+      <td style="color:${Math.abs(s.mean - norm[j].mean) <= norm[j].sd ? 'var(--green)' : 'var(--amber)'}">${diffStr}</td>
+    </tr>`;
+  });
+
+  if (reportChartInst) reportChartInst.destroy();
+  const maxLen = Math.max(recorded.hip.length, 1);
+  const labels = recorded.hip.map((_, i) => Math.round((i / (maxLen - 1)) * 100));
+
+  const norm100 = (arr) => {
+    const mn = Math.min(...arr), mx = Math.max(...arr);
+    return arr.map(v => Math.round(v * 10) / 10);
+  };
+
+  reportChartInst = new Chart(document.getElementById('reportChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Hip', data: norm100(recorded.hip), borderColor: 'var(--hip-color)', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, tension: 0.4 },
+        { label: 'Knee', data: norm100(recorded.knee), borderColor: 'var(--knee-color)', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, borderDash: [5, 3], tension: 0.4 },
+        { label: 'Ankle', data: norm100(recorded.ankle), borderColor: 'var(--ankle-color)', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, borderDash: [2, 2], tension: 0.4 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 600 },
+      plugins: {
+        legend: { display: false },
+        tooltip: { mode: 'index', intersect: false, callbacks: { label: i => ` ${i.dataset.label}: ${i.raw}°` } }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Frame (%)', font: { size: 10 }, color: '#6b7a99' }, ticks: { maxTicksLimit: 6, font: { size: 9 }, color: '#6b7a99', autoSkip: true }, grid: { color: 'rgba(255,255,255,0.04)' } },
+        y: { title: { display: true, text: 'Angle (°)', font: { size: 10 }, color: '#6b7a99' }, ticks: { font: { size: 9 }, color: '#6b7a99', maxTicksLimit: 6 }, grid: { color: 'rgba(255,255,255,0.04)' } }
+      }
+    }
+  });
+
+  document.getElementById('reportSection').classList.add('show');
+  window._reportData = { stats, name, type, date: now, recorded };
+}
+
+function exportReport() {
+  const d = window._reportData;
+  if (!d) return;
+  const { stats, name, type, date } = d;
+
+  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Movement Analysis Report — ${name}</title>
+<style>
+body{font-family:Arial,sans-serif;background:#f4f6f9;color:#1a1a2e;margin:0;padding:2rem;}
+.container{max-width:900px;margin:0 auto;background:#fff;border-radius:12px;padding:2rem;border:1px solid #e0e8f0;}
+h1{color:#1A3C5E;font-size:22px;margin-bottom:4px;}
+.sub{color:#888;font-size:13px;margin-bottom:1.5rem;}
+.meta-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.5rem;}
+.meta-card{background:#f4f6f9;border-radius:8px;padding:0.75rem;}
+.meta-label{font-size:10px;color:#888;text-transform:uppercase;margin-bottom:3px;}
+.meta-val{font-size:14px;font-weight:600;color:#1A3C5E;}
+.risk-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:1.5rem;}
+.risk-card{border-radius:8px;padding:0.75rem;text-align:center;}
+.risk-joint{font-weight:600;font-size:14px;}
+.risk-label{font-size:12px;margin-top:4px;}
+.risk-low{background:#EAF3DE;}.risk-low .risk-label{color:#3B6D11;}
+.risk-med{background:#FAEEDA;}.risk-med .risk-label{color:#854F0B;}
+.risk-high{background:#FCEBEB;}.risk-high .risk-label{color:#A32D2D;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{text-align:left;padding:8px;background:#f4f6f9;color:#888;font-size:11px;text-transform:uppercase;}
+td{padding:8px;border-bottom:1px solid #f0f0f0;}
+.footer{font-size:11px;color:#aaa;margin-top:1.5rem;padding-top:1rem;border-top:1px solid #e0e8f0;}
+</style></head><body><div class="container">
+<h1>Movement Analysis Report</h1>
+<div class="sub">Generated by MotionIQ Pose Estimation</div>
+<div class="meta-grid">
+<div class="meta-card"><div class="meta-label">Patient</div><div class="meta-val">${name}</div></div>
+<div class="meta-card"><div class="meta-label">Assessment</div><div class="meta-val">${type}</div></div>
+<div class="meta-card"><div class="meta-label">Date</div><div class="meta-val">${date}</div></div>
+<div class="meta-card"><div class="meta-label">Method</div><div class="meta-val">Pose Estimation</div></div>
+</div>
+<h2 style="font-size:14px;color:#1A3C5E;margin-bottom:0.75rem;">Risk classification</h2>
+<div class="risk-grid">
+${['hip','knee','ankle'].map(j=>{
+  const n={hip:{mean:20,sd:8},knee:{mean:60,sd:10},ankle:{mean:15,sd:6}};
+  const diff=Math.abs(stats[j].mean-n[j].mean);
+  const risk=diff<=n[j].sd?'low':diff<=n[j].sd*2?'med':'high';
+  const lbl={low:'Normal',med:'Monitor',high:'Flagged'}[risk];
+  return `<div class="risk-card risk-${risk}"><div class="risk-joint">${j.charAt(0).toUpperCase()+j.slice(1)}</div><div class="risk-label">${lbl}</div></div>`;
+}).join('')}
+</div>
+<h2 style="font-size:14px;color:#1A3C5E;margin-bottom:0.75rem;">Peak angle summary</h2>
+<table><thead><tr><th>Joint</th><th>Peak flexion</th><th>Peak extension</th><th>ROM</th><th>Mean</th></tr></thead><tbody>
+${['hip','knee','ankle'].map(j=>`<tr><td><strong>${j.charAt(0).toUpperCase()+j.slice(1)}</strong></td><td>${stats[j].max}°</td><td>${stats[j].min}°</td><td>${stats[j].rom}°</td><td>${stats[j].mean}°</td></tr>`).join('')}
+</tbody></table>
+<div class="footer">MotionIQ | HCPC Registered Physiotherapist &amp; Biomechanics Specialist | Liverpool, UK<br>This report is for clinical reference only and should be interpreted by a qualified physiotherapist.</div>
+</div></body></html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `MotionIQ_${name.replace(/\s/g,'_')}_${date.replace(/\s/g,'_')}.html`;
+  a.click();
+}
+
+window.poseReady = false;
+
+function onResults(results) {
+  const canvas = document.getElementById('outputCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = results.image.width;
+  canvas.height = results.image.height;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (results.poseLandmarks) {
+    drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, { color: 'rgba(0,212,255,0.4)', lineWidth: 2 });
+    drawLandmarks(ctx, results.poseLandmarks, { color: '#00d4ff', lineWidth: 1, radius: 3 });
+
+    const angles = getAngles(results.poseLandmarks);
+    if (angles) {
+      const { hip, knee, ankle } = angles;
+
+      document.getElementById('liveHip').textContent = hip + '°';
+      document.getElementById('liveKnee').textContent = knee + '°';
+      document.getElementById('liveAnkle').textContent = ankle + '°';
+      document.getElementById('mHip').textContent = hip;
+      document.getElementById('mKnee').textContent = knee;
+      document.getElementById('mAnkle').textContent = ankle;
+      document.getElementById('liveHipVal').textContent = hip + '°';
+      document.getElementById('liveKneeVal').textContent = knee + '°';
+      document.getElementById('liveAnkleVal').textContent = ankle + '°';
+
+      pushLive(liveCharts.hip,   liveBuffer.hip,   hip);
+      pushLive(liveCharts.knee,  liveBuffer.knee,  knee);
+      pushLive(liveCharts.ankle, liveBuffer.ankle, ankle);
+
+      if (recording) {
+        recorded.hip.push(hip);
+        recorded.knee.push(knee);
+        recorded.ankle.push(ankle);
+        recorded.t.push(Date.now() - recStart);
+      }
+    }
+  }
+}
+
+async function initPose() {
+  const pose = new Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+  });
+  pose.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    enableSegmentation: false,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+  pose.onResults(onResults);
+
+  const video = document.getElementById('inputVideo');
+  const camera = new Camera(video, {
+    onFrame: async () => { await pose.send({ image: video }); },
+    width: 640, height: 480
+  });
+  camera.start().then(() => {
+    window.poseReady = true;
+    setStatus('live', 'Camera live — pose tracking active');
+    document.getElementById('startBtn').disabled = false;
+  }).catch(err => {
+    setStatus('', 'Camera error: ' + err.message);
+    document.getElementById('infoBox').textContent = 'Could not access camera. Please allow camera permissions and reload the page.';
+  });
+}
+
+liveCharts.hip   = initLiveChart('liveHipChart',   '#00d4ff');
+liveCharts.knee  = initLiveChart('liveKneeChart',  '#a78bfa');
+liveCharts.ankle = initLiveChart('liveAnkleChart', '#34d399');
+
+initPose();
+</script>
+</body>
+</html>
